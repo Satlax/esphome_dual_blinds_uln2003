@@ -1,0 +1,306 @@
+esphome:
+  name: "dual-blinds-bedroom"
+  friendly_name: Dual Blinds Bedroom
+
+  on_boot:
+    priority: -200
+    then:
+      - logger.log: "BOOT: Restoring positions from flash"
+      - stepper.report_position:
+          id: blind_left_stepper
+          position: !lambda 'return id(left_saved_position);'
+      - stepper.report_position:
+          id: blind_right_stepper
+          position: !lambda 'return id(right_saved_position);'
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: !lambda 'return id(left_saved_position);'
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: !lambda 'return id(right_saved_position);'
+      - delay: 100ms
+      - lambda: |-
+          id(left_blind).publish_state();
+          id(right_blind).publish_state();
+      - logger.log: "BOOT: Published states"
+
+esp8266:
+  board: d1_mini
+  restore_from_flash: true
+# -------------------- Базовая периферия --------------------
+logger:
+
+api:
+  encryption:
+    key: "yourkey"
+
+ota:
+  - platform: esphome
+    password: "yourpass"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none
+
+  ap:
+    ssid: "Dual-Blinds Fallback Hotspot"
+    password: "2eVhZ6mPX1lH"
+
+captive_portal:
+
+# -------------------- Сохранение позиций --------------------
+preferences:
+  flash_write_interval: 60s
+
+globals:
+  - id: left_saved_position
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: right_saved_position
+    type: int
+    restore_value: yes
+    initial_value: '0'
+  - id: left_max_position
+    type: int
+    initial_value: '52800'
+  - id: right_max_position
+    type: int
+    initial_value: '53400'
+
+stepper:
+  - platform: uln2003
+    id: blind_left_stepper
+    pin_a: D1
+    pin_b: D2
+    pin_c: D3
+    pin_d: D4
+    max_speed: 500
+    acceleration: 250
+    deceleration: 250
+    step_mode: FULL_STEP
+    sleep_when_done: true
+
+  - platform: uln2003
+    id: blind_right_stepper
+    pin_a: D5
+    pin_b: D6
+    pin_c: D7
+    pin_d: D8
+    max_speed: 500
+    acceleration: 250
+    deceleration: 250
+    step_mode: FULL_STEP
+    sleep_when_done: true
+
+cover:
+  - platform: template
+    name: "Обе шторы"
+    id: both_blinds
+    device_class: blind
+    has_position: true
+    assumed_state: false
+    lambda: |-
+      float left_pct = 0.0;
+      float right_pct = 0.0;
+      if (id(left_max_position) > 0)
+        left_pct = float(id(blind_left_stepper).current_position) / float(id(left_max_position));
+      if (id(right_max_position) > 0)
+        right_pct = float(id(blind_right_stepper).current_position) / float(id(right_max_position));
+      float avg = (left_pct + right_pct) / 2.0;
+      if (avg < 0.0) avg = 0.0;
+      if (avg > 1.0) avg = 1.0;
+      return avg;
+    open_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: !lambda "return id(left_max_position);"
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: !lambda "return id(right_max_position);"
+      - globals.set:
+          id: left_saved_position
+          value: !lambda "return id(left_max_position);"
+      - globals.set:
+          id: right_saved_position
+          value: !lambda "return id(right_max_position);"
+    close_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: 0
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: 0
+      - globals.set:
+          id: left_saved_position
+          value: '0'
+      - globals.set:
+          id: right_saved_position
+          value: '0'
+    stop_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: !lambda "return id(blind_left_stepper).current_position;"
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: !lambda "return id(blind_right_stepper).current_position;"
+      - globals.set:
+          id: left_saved_position
+          value: !lambda "return id(blind_left_stepper).current_position;"
+      - globals.set:
+          id: right_saved_position
+          value: !lambda "return id(blind_right_stepper).current_position;"
+      - lambda: |-
+          id(left_blind).publish_state();
+          id(right_blind).publish_state();
+    position_action:
+      - lambda: |-
+          int left_target = round(pos * id(left_max_position));
+          int right_target = round(pos * id(right_max_position));
+          if (left_target < 0) left_target = 0;
+          if (left_target > id(left_max_position)) left_target = id(left_max_position);
+          if (right_target < 0) right_target = 0;
+          if (right_target > id(right_max_position)) right_target = id(right_max_position);
+          id(blind_left_stepper).set_target(left_target);
+          id(blind_right_stepper).set_target(right_target);
+          id(left_saved_position) = left_target;
+          id(right_saved_position) = right_target;
+
+  - platform: template
+    name: "Левая штора"
+    id: left_blind
+    device_class: blind
+    has_position: true
+    assumed_state: false
+    lambda: |-
+      if (id(left_max_position) <= 0) return 0.0;
+      float pos = float(id(blind_left_stepper).current_position) / float(id(left_max_position));
+      if (pos < 0.0) pos = 0.0;
+      if (pos > 1.0) pos = 1.0;
+      return pos;
+    open_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: !lambda "return id(left_max_position);"
+      - globals.set:
+          id: left_saved_position
+          value: !lambda "return id(left_max_position);"
+    close_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: 0
+      - globals.set:
+          id: left_saved_position
+          value: '0'
+    stop_action:
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: !lambda "return id(blind_left_stepper).current_position;"
+      - globals.set:
+          id: left_saved_position
+          value: !lambda "return id(blind_left_stepper).current_position;"
+      - lambda: 'id(left_blind).publish_state();'
+    position_action:
+      - lambda: |-
+          int target = round(pos * id(left_max_position));
+          if (target < 0) target = 0;
+          if (target > id(left_max_position)) target = id(left_max_position);
+          id(blind_left_stepper).set_target(target);
+          id(left_saved_position) = target;
+
+  - platform: template
+    name: "Правая штора"
+    id: right_blind
+    device_class: blind
+    has_position: true
+    assumed_state: false
+    lambda: |-
+      if (id(right_max_position) <= 0) return 0.0;
+      float pos = float(id(blind_right_stepper).current_position) / float(id(right_max_position));
+      if (pos < 0.0) pos = 0.0;
+      if (pos > 1.0) pos = 1.0;
+      return pos;
+    open_action:
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: !lambda "return id(right_max_position);"
+      - globals.set:
+          id: right_saved_position
+          value: !lambda "return id(right_max_position);"
+    close_action:
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: 0
+      - globals.set:
+          id: right_saved_position
+          value: '0'
+    stop_action:
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: !lambda "return id(blind_right_stepper).current_position;"
+      - globals.set:
+          id: right_saved_position
+          value: !lambda "return id(blind_right_stepper).current_position;"
+      - lambda: 'id(right_blind).publish_state();'
+    position_action:
+      - lambda: |-
+          int target = round(pos * id(right_max_position));
+          if (target < 0) target = 0;
+          if (target > id(right_max_position)) target = id(right_max_position);
+          id(blind_right_stepper).set_target(target);
+          id(right_saved_position) = target;
+
+button:
+  - platform: template
+    name: "Калибровка левой"
+    id: calibrate_left_button
+    icon: mdi:arrow-collapse-left
+    on_press:
+      - stepper.report_position:
+          id: blind_left_stepper
+          position: 0
+      - stepper.set_target:
+          id: blind_left_stepper
+          target: 0
+      - globals.set:
+          id: left_saved_position
+          value: '0'
+      - lambda: 'id(left_blind).publish_state();'
+
+  - platform: template
+    name: "Калибровка правой"
+    id: calibrate_right_button
+    icon: mdi:arrow-collapse-right
+    on_press:
+      - stepper.report_position:
+          id: blind_right_stepper
+          position: 0
+      - stepper.set_target:
+          id: blind_right_stepper
+          target: 0
+      - globals.set:
+          id: right_saved_position
+          value: '0'
+      - lambda: 'id(right_blind).publish_state();'
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          if (id(blind_left_stepper).has_reached_target()) {
+            static int last_left_pos = -1;
+            int cur_left = id(blind_left_stepper).current_position;
+            if (cur_left != last_left_pos) {
+              last_left_pos = cur_left;
+              id(left_saved_position) = cur_left;
+            }
+          }
+          if (id(blind_right_stepper).has_reached_target()) {
+            static int last_right_pos = -1;
+            int cur_right = id(blind_right_stepper).current_position;
+            if (cur_right != last_right_pos) {
+              last_right_pos = cur_right;
+              id(right_saved_position) = cur_right;
+            }
+          }
